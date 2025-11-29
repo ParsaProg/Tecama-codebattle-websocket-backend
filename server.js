@@ -6,6 +6,8 @@ const PORT = process.env.PORT || 3001;
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const cors = require('cors');
+app.use(cors({ origin: '*' }));
 app.get("/", (req, res) => {
   res.send("TECAMA CodeBattle WebSocket Server (MVP)");
 });
@@ -331,6 +333,7 @@ wss.on("connection", (ws) => {
     }
   });
 });
-server.listen(PORT, () => {
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log("🚀 Server running on port", PORT);
 });
