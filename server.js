@@ -55,38 +55,49 @@ rooms = Map {
 let rooms = new Map();
 const history = new Map(); // For completed games: roomId => {room data, result}
 
-// Function to save rooms to Redis
-async function saveRooms() {
+// Function to save a single room to Redis
+async function saveRoom(roomId) {
   try {
-    const serializableRooms = Array.from(rooms.entries()).map(([roomId, roomData]) => ({
-      roomId,
+    const roomData = rooms.get(roomId);
+    if (!roomData) return;
+    const serializableRoom = {
       ...roomData,
       users: Array.from(roomData.users.entries()).map(([email, user]) => ({
         email,
         userData: user.userData // ws is not serializable, so we omit ws and store only userData
       }))
-    }));
-    await redisClient.set('rooms', JSON.stringify(serializableRooms));
-    console.log("💾 Rooms saved to Redis");
+    };
+    await redisClient.set(`room:${roomId}`, JSON.stringify(serializableRoom));
+    console.log(`💾 Room ${roomId} saved to Redis`);
   } catch (e) {
-    console.error("❌ Error saving rooms to Redis:", e);
+    console.error(`❌ Error saving room ${roomId} to Redis:`, e);
   }
 }
 
-// Function to load rooms from Redis
+// Function to delete a room from Redis
+async function deleteRoom(roomId) {
+  try {
+    await redisClient.del(`room:${roomId}`);
+    console.log(`🗑 Room ${roomId} deleted from Redis`);
+  } catch (e) {
+    console.error(`❌ Error deleting room ${roomId} from Redis:`, e);
+  }
+}
+
+// Function to load all rooms from Redis
 async function loadRooms() {
   try {
-    const data = await redisClient.get('rooms');
-    if (data) {
-      const parsed = JSON.parse(data);
-      rooms = new Map(parsed.map(room => {
-        const usersMap = new Map(room.users.map(u => [u.email, { userData: u.userData }])); // Reconstruct users Map without ws
-        return [room.roomId, { ...room, users: usersMap }];
-      }));
-      console.log("📂 Rooms loaded from Redis");
-    } else {
-      console.log("📄 No rooms found in Redis, starting fresh");
+    const keys = await redisClient.keys('room:*');
+    for (const key of keys) {
+      const data = await redisClient.get(key);
+      if (data) {
+        const roomId = key.split(':')[1];
+        const parsed = JSON.parse(data);
+        const usersMap = new Map(parsed.users.map(u => [u.email, { userData: u.userData }])); // Reconstruct users Map without ws
+        rooms.set(roomId, { ...parsed, users: usersMap });
+      }
     }
+    console.log("📂 All rooms loaded from Redis");
   } catch (e) {
     console.error("❌ Error loading rooms from Redis:", e);
   }
@@ -165,7 +176,7 @@ wss.on("connection", (ws) => {
       wss.clients.forEach((client) =>
         safeSend(client, "rooms_list", { rooms: list })
       );
-      saveRooms(); // Save after create
+      saveRoom(roomId); // Save the new room
       return;
     }
     // ===================== LIST ROOMS =====================
@@ -239,7 +250,7 @@ wss.on("connection", (ws) => {
         room.started = true;
         broadcast(roomId, "game_started", { time: 300 });
       }
-      saveRooms(); // Save after join
+      saveRoom(roomId); // Save the updated room
       return;
     }
     // ===================== LEAVE ROOM =====================
@@ -280,6 +291,7 @@ wss.on("connection", (ws) => {
           // Move to history
           history.set(roomId, { ...room, completedAt: Date.now() });
           rooms.delete(roomId);
+          deleteRoom(roomId); // Delete from Redis
           console.log(`🏆 Game ended in ${roomId}: Winner ${winnerEmail}, Loser ${leftEmail}`);
         } else {
           // Not started or empty
@@ -291,7 +303,10 @@ wss.on("connection", (ws) => {
           console.log(`🚪 ${leftUserData?.email} left ${roomId}`);
           if (room.users.size === 0) {
             rooms.delete(roomId);
+            deleteRoom(roomId); // Delete from Redis
             console.log("🗑 Room removed:", roomId);
+          } else {
+            saveRoom(roomId); // Save updated room
           }
         }
         // Update rooms list
@@ -306,7 +321,6 @@ wss.on("connection", (ws) => {
           }
         }
       }
-      saveRooms(); // Save after leave
       return;
     }
     // ===================== CHAT MESSAGE =====================
@@ -366,6 +380,7 @@ wss.on("connection", (ws) => {
           // Move to history
           history.set(roomId, { ...room, completedAt: Date.now() });
           rooms.delete(roomId);
+          deleteRoom(roomId); // Delete from Redis
           console.log(`🏆 Game ended in ${roomId}: Winner ${winnerEmail}, Loser ${leftEmail}`);
         } else {
           broadcast(roomId, "user_left", {
@@ -373,6 +388,7 @@ wss.on("connection", (ws) => {
             users: [...room.users.values()].map((u) => u.userData),
           });
           if (room.users.size === 0) rooms.delete(roomId);
+          deleteRoom(roomId); // Delete from Redis
         }
         // Update rooms list
         const roomList = [...rooms.values()].map((r) => ({
@@ -385,7 +401,6 @@ wss.on("connection", (ws) => {
             safeSend(client, "rooms_list", { rooms: roomList });
           }
         }
-        saveRooms(); // Save after close/leave
         break; // assuming user in at most one room
       }
     }
