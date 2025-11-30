@@ -2,8 +2,6 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
 const PORT = process.env.PORT || 3001;
 const app = express();
 const server = http.createServer(app);
@@ -43,50 +41,8 @@ rooms = Map {
   }
 }
 */
-const roomsFile = '/data/rooms.json'; // Mount path for the volume
-let rooms = new Map();
+const rooms = new Map();
 const history = new Map(); // For completed games: roomId => {room data, result}
-
-// Function to save rooms to file
-function saveRooms() {
-  try {
-    const serializableRooms = Array.from(rooms.entries()).map(([roomId, roomData]) => ({
-      roomId,
-      ...roomData,
-      users: Array.from(roomData.users.entries()).map(([email, user]) => ({
-        email,
-        userData: user.userData // ws is not serializable, so we omit ws and store only userData
-      }))
-    }));
-    fs.writeFileSync(roomsFile, JSON.stringify(serializableRooms, null, 2));
-    console.log("💾 Rooms saved to file");
-  } catch (e) {
-    console.error("❌ Error saving rooms:", e);
-  }
-}
-
-// Function to load rooms from file
-function loadRooms() {
-  try {
-    if (fs.existsSync(roomsFile)) {
-      const data = fs.readFileSync(roomsFile, 'utf8');
-      const parsed = JSON.parse(data);
-      rooms = new Map(parsed.map(room => {
-        const usersMap = new Map(room.users.map(u => [u.email, { userData: u.userData }])); // Reconstruct users Map without ws
-        return [room.roomId, { ...room, users: usersMap }];
-      }));
-      console.log("📂 Rooms loaded from file");
-    } else {
-      console.log("📄 No rooms file found, starting fresh");
-    }
-  } catch (e) {
-    console.error("❌ Error loading rooms:", e);
-  }
-}
-
-// Load rooms on startup
-loadRooms();
-
 function broadcast(roomId, type, payload, except = null) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -155,7 +111,6 @@ wss.on("connection", (ws) => {
       wss.clients.forEach((client) =>
         safeSend(client, "rooms_list", { rooms: list })
       );
-      saveRooms(); // Save after create
       return;
     }
     // ===================== LIST ROOMS =====================
@@ -229,7 +184,6 @@ wss.on("connection", (ws) => {
         room.started = true;
         broadcast(roomId, "game_started", { time: 300 });
       }
-      saveRooms(); // Save after join
       return;
     }
     // ===================== LEAVE ROOM =====================
@@ -296,7 +250,6 @@ wss.on("connection", (ws) => {
           }
         }
       }
-      saveRooms(); // Save after leave
       return;
     }
     // ===================== CHAT MESSAGE =====================
@@ -375,7 +328,6 @@ wss.on("connection", (ws) => {
             safeSend(client, "rooms_list", { rooms: roomList });
           }
         }
-        saveRooms(); // Save after close/leave
         break; // assuming user in at most one room
       }
     }
